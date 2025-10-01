@@ -1,51 +1,48 @@
 import socket
 import hashlib
+from tqdm import tqdm
 
-# Config
-HOST = '127.0.0.1'  # Seeder IP
+HOST = '127.0.0.1'
 PORT = 5001
-CHUNK_SIZE = 1024
-OUTPUT_FILE = 'downloaded_example.mkv'
+CHUNK_SIZE = 1024 * 1024  # must match seeder
+OUTPUT_FILE = 'Wick Is Pain (2025) WEBDL-1080p-downloaded.mkv'
 
 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 client.connect((HOST, PORT))
+print("[Leecher] Connected")
 
-# Read header until "END\n"
-header_data = b""
-while b"END\n" not in header_data:
-    header_data += client.recv(1024)
+# Read 4-byte header length
+header_len_bytes = client.recv(4)
+header_len = int.from_bytes(header_len_bytes, 'big')
+print(f"[Leecher] Header length: {header_len} bytes")
 
-header_text = header_data.decode()
-lines = header_text.strip().splitlines()
+# Read exactly header_len bytes for header
+header_bytes = b""
+while len(header_bytes) < header_len:
+    header_bytes += client.recv(header_len - len(header_bytes))
 
 # Parse header
+lines = header_bytes.decode().splitlines()
 num_chunks = int(lines[0])
-chunk_hashes = lines[1:-1]  # all except first (count) and last (END)
-
+chunk_hashes = lines[1:]
 print(f"[Leecher] Expecting {num_chunks} chunks")
-print(f"[Leecher] Received {len(chunk_hashes)} hashes")
 
-# Receive chunks
-chunks = []
-for i in range(num_chunks):
-    data = b''
-    while len(data) < CHUNK_SIZE:
-        packet = client.recv(CHUNK_SIZE - len(data))
-        if not packet:
-            break
-        data += packet
-    chunks.append(data)
-    print(f"[Leecher] Received chunk {i} ({len(data)} bytes)")
-
-# Verify and write file
+# Receive file chunks and write to disk
 with open(OUTPUT_FILE, 'wb') as f:
-    for i, c in enumerate(chunks):
-        sha1 = hashlib.sha1(c).hexdigest()
+    for i in tqdm(range(num_chunks), desc="Receiving"):
+        remaining = CHUNK_SIZE
+        chunk_data = b""
+        while remaining > 0:
+            packet = client.recv(remaining)
+            if not packet:
+                break
+            chunk_data += packet
+            remaining -= len(packet)
+        # verify
+        sha1 = hashlib.sha1(chunk_data).hexdigest()
         if sha1 != chunk_hashes[i]:
-            print(f"[Leecher] ❌ Chunk {i} failed verification (got {sha1[:8]}..., expected {chunk_hashes[i][:8]}...)")
-        else:
-            print(f"[Leecher] ✅ Chunk {i} verified ({sha1[:8]}...)")
-        f.write(c)
+            print(f"[Leecher] ❌ Chunk {i} failed verification")
+        f.write(chunk_data)
 
-print(f"[Leecher] File downloaded and saved as {OUTPUT_FILE}")
+print(f"[Leecher] ✅ File downloaded and saved as {OUTPUT_FILE}")
 client.close()
